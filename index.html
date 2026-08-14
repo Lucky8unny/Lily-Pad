@@ -93,7 +93,6 @@
     <button id="muteBtn" style="background:none;border:none;font-size:18px;cursor:pointer;padding:0 0 0 4px;">🔊</button>
   </div>
   <canvas id="game"></canvas>
-  <audio id="bgm" src="Lily_Pad_Leap_Themesong.mp3" loop></audio>
   <div id="overlay">
     <h1>Lily Pad Leap</h1>
     <p>Hop the frog across the road and river. Fill all the lily pads to clear the level!</p>
@@ -110,7 +109,6 @@ const startBtn = document.getElementById('startBtn');
 const lvlEl = document.getElementById('lvl');
 const scoreEl = document.getElementById('score');
 const livesEl = document.getElementById('lives');
-document.getElementById('bgm').volume = 0.3;
 
 // ---- Sound (Web Audio, no files) ----
 let actx = null, muted = false;
@@ -141,6 +139,40 @@ const SFX = {
   level:  () => [523,659,784,1046].forEach((f,i)=>setTimeout(()=>beep(f,0.16,'triangle',0.16),i*100)),
   charm:  () => [784,988,1319,1568,2093].forEach((f,i)=>setTimeout(()=>beep(f,0.13,'sine',0.16),i*70)),
 };
+
+// ---- Background music (gapless Web Audio loop) ----
+let musicBuffer = null;
+let musicSource = null;
+let musicStarted = false;
+
+async function loadMusic() {
+  if (musicBuffer || !actx) return;
+  try {
+    const res = await fetch('Lily_Pad_Leap_Themesong.wav');
+    const data = await res.arrayBuffer();
+    musicBuffer = await actx.decodeAudioData(data);
+  } catch (e) { /* music unavailable — ignore */ }
+}
+
+async function startMusic() {
+  if (musicStarted || muted) return;
+  await loadMusic();
+  if (!musicBuffer || !actx) return;
+  musicSource = actx.createBufferSource();
+  musicSource.buffer = musicBuffer;
+  musicSource.loop = true;
+  const musicGain = actx.createGain();
+  musicGain.gain.value = 0.3;
+  musicSource.connect(musicGain);
+  musicGain.connect(actx.destination);
+  musicSource.start();
+  musicStarted = true;
+}
+
+function stopMusic() {
+  if (musicSource) { try { musicSource.stop(); } catch(e){} musicSource = null; }
+  musicStarted = false;
+}
 
 // ---- Grid config ----
 const COLS = 11;
@@ -327,13 +359,14 @@ canvas.addEventListener('touchend', e => {
   }
   touchStart = null;
 }, { passive: true });
-
-startBtn.addEventListener('click', () => { initAudio(); document.getElementById('bgm').play(); startGame(); });
+startBtn.addEventListener('click', () => { initAudio(); startMusic(); startGame(); });
 
 document.getElementById('muteBtn').addEventListener('click', (e) => {
   muted = !muted;
   e.target.textContent = muted ? '🔇' : '🔊';
+  if (muted) stopMusic(); else startMusic();
 });
+
 
 function spawnPickup() {
   // Choose a river or road row (the interesting lanes).
