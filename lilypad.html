@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Lily Pad Leap</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%;
+    background: #0d1b2a;
+    font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+    user-select: none;
+  }
+  #wrap {
+    position: relative;
+    width: 100%;
+    max-width: 480px;
+    height: 100%;
+    max-height: 780px;
+    display: flex;
+    flex-direction: column;
+    background: #132538;
+  }
+  #hud {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    background: #0a1522;
+    color: #cfe8d4;
+    font-size: 15px;
+    letter-spacing: 0.5px;
+    border-bottom: 2px solid #1d3a52;
+  }
+  #hud .grp { display: flex; align-items: center; gap: 6px; }
+  #hud .lives { color: #ff6b8a; font-size: 18px; letter-spacing: 2px; }
+  #hud .label { opacity: 0.55; font-size: 11px; text-transform: uppercase; }
+  #hud .val { font-weight: bold; color: #ffe08a; }
+  canvas { display: block; width: 100%; flex: 1 1 auto; min-height: 0; image-rendering: auto; background: #1b3a2a; }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(6, 15, 26, 0.92);
+    color: #eafff0;
+    text-align: center;
+    padding: 24px;
+    gap: 14px;
+    z-index: 10;
+  }
+  #overlay h1 {
+    font-size: 40px;
+    color: #7ee0a0;
+    text-shadow: 0 3px 0 #1a4a30;
+    letter-spacing: 1px;
+  }
+  #overlay h2 { font-size: 26px; color: #ffe08a; }
+  #overlay p { font-size: 15px; opacity: 0.85; max-width: 300px; line-height: 1.5; }
+  #overlay .btn {
+    margin-top: 6px;
+    padding: 14px 34px;
+    font-size: 20px;
+    font-family: inherit;
+    font-weight: bold;
+    color: #06241a;
+    background: #7ee0a0;
+    border: none;
+    border-radius: 40px;
+    box-shadow: 0 4px 0 #4ba86e;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+  }
+  #overlay .btn:active { transform: translateY(3px); box-shadow: 0 1px 0 #4ba86e; }
+  #overlay .hint { font-size: 13px; opacity: 0.6; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="hud">
+    <div class="grp"><span class="label">Level</span><span class="val" id="lvl">1</span></div>
+    <div class="grp"><span class="label">Score</span><span class="val" id="score">0</span></div>
+    <div class="grp lives" id="lives">🐸🐸🐸</div>
+    <button id="muteBtn" style="background:none;border:none;font-size:18px;cursor:pointer;padding:0 0 0 4px;">🔊</button>
+  </div>
+  <canvas id="game"></canvas>
+  <audio id="bgm" src="Lily_Pad_Leap_Themesong.mp3" loop></audio>
+  <div id="overlay">
+    <h1>Lily Pad Leap</h1>
+    <p>Hop the frog across the road and river. Fill all the lily pads to clear the level!</p>
+    <p class="hint">Swipe or tap edges to move · Arrow keys on desktop</p>
+    <button class="btn" id="startBtn">Play</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const startBtn = document.getElementById('startBtn');
+const lvlEl = document.getElementById('lvl');
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+document.getElementById('bgm').volume = 0.3;
+
+// ---- Sound (Web Audio, no files) ----
+let actx = null, muted = false;
+function initAudio() {
+  if (actx) return;
+  try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {}
+}
+function beep(freq, dur, type = 'square', vol = 0.15, slideTo = null) {
+  if (!actx || muted) return;
+  try {
+    if (actx.state === 'suspended') actx.resume();
+    const t0 = actx.currentTime;
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, t0);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(1, slideTo), t0 + dur);
+    g.gain.setValueAtTime(Math.max(0.0001, vol), t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(actx.destination);
+    o.start(t0); o.stop(t0 + dur);
+  } catch (e) { /* audio not available in this context — ignore */ }
+}
+const SFX = {
+  hop:    () => beep(420, 0.09, 'square', 0.12, 620),
+  pad:    () => { beep(660, 0.12, 'triangle', 0.18); setTimeout(()=>beep(880,0.14,'triangle',0.18),90); },
+  splat:  () => beep(180, 0.35, 'sawtooth', 0.2, 60),
+  level:  () => [523,659,784,1046].forEach((f,i)=>setTimeout(()=>beep(f,0.16,'triangle',0.16),i*100)),
+  charm:  () => [784,988,1319,1568,2093].forEach((f,i)=>setTimeout(()=>beep(f,0.13,'sine',0.16),i*70)),
+};
+
+// ---- Grid config ----
+const COLS = 11;
+const ROWS = 14; // 1 top pad row + 5 river + 1 median + 5 road + 1 start + hud handled sep
+let TILE = 40;
+
+// Row layout (index 0 = top). We build lanes below.
+// 0: home pads (goals)
+// 1-5: river (logs / turtles)
+// 6: safe median (grass)
+// 7-11: road (cars)
+// 12: safe start (grass)
+// 13: unused padding -> we'll use 13 rows total actually
+const R_HOME = 0;
+const RIVER = [1,2,3,4,5];
+const R_MED = 6;
+const ROAD = [7,8,9,10,11];
+const R_START = 12;
+const TOTAL_ROWS = 13;
+
+let cssW = 0, cssH = 0;
+function resize() {
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.round(rect.width);
+  const h = Math.round(rect.height);
+  // Bail if the layout hasn't settled yet (mobile can report 0 at load)
+  if (w < 2 || h < 2) { requestAnimationFrame(resize); return; }
+  cssW = w; cssH = h;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  TILE = Math.min(w / COLS, h / TOTAL_ROWS);
+  boardW = TILE * COLS;
+  boardH = TILE * TOTAL_ROWS;
+  offX = (w - boardW) / 2;
+  offY = (h - boardH) / 2;
+}
+let boardW, boardH, offX, offY;
+
+// ---- Game state ----
+let state = 'menu';
+let level = 1;
+let score = 0;
+let lives = 3;
+let frog, lanes, pads, timer, maxTimer;
+let deathAnim = 0, winFlash = 0;
+let pickup = null;        // the golden extra-life frog, when present
+let pickupTimer = 0;      // seconds until the next pickup spawns
+let pickupGlow = 0;       // brief flash when collected
+let pickupUsed = false;   // true once one has been collected this level (max 1/level)
+
+function rand(a, b) { return a + Math.random() * (b - a); }
+
+// Difficulty: starts easy. First few levels add randomness/variety,
+// later levels ramp speed and density.
+function buildLevel() {
+  lanes = {};
+  const L = level;
+  // speed scales slowly; randomness of speeds grows first
+  const baseSpeed = 0.9 + Math.min(L, 8) * 0.12 + Math.max(0, L - 8) * 0.15;
+  const speedJitter = Math.min(0.15 + L * 0.06, 0.9);
+  const density = Math.min(0.42 + L * 0.03, 0.72);
+
+  // River lanes: logs & turtles
+  RIVER.forEach((row, i) => {
+    const dir = i % 2 === 0 ? 1 : -1;
+    const isTurtle = i % 2 === 1;
+    const spd = baseSpeed * rand(1 - speedJitter, 1 + speedJitter) * dir * 0.85;
+    const items = [];
+    const len = isTurtle ? 2 + Math.floor(rand(0, 2)) : 2 + Math.floor(rand(0, 3));
+    const gap = (isTurtle ? 3.2 : 3.6) - density; // smaller gap = denser
+    // Diving turtles start at level 2, ramping up gradually.
+    const diveChance = L < 2 ? 0 : Math.min(0.1 + (L - 2) * 0.05, 0.35);
+    let x = rand(0, 3);
+    while (x < COLS + 4) {
+      items.push({ x, len, diving: isTurtle && Math.random() < diveChance, phase: rand(0, Math.PI*2) });
+      x += len + Math.max(1.4, gap + rand(-0.3, 0.6));
+    }
+    lanes[row] = { row, type: isTurtle ? 'turtle' : 'log', dir, spd, items };
+  });
+
+  // Road lanes: cars
+  ROAD.forEach((row, i) => {
+    const dir = i % 2 === 0 ? -1 : 1;
+    const spd = baseSpeed * rand(1 - speedJitter, 1 + speedJitter) * dir;
+    const items = [];
+    const kinds = ['car', 'car', 'truck'];
+    const gap = 4.2 - density * 2.2;
+    let x = rand(0, 3);
+    while (x < COLS + 4) {
+      const kind = kinds[Math.floor(rand(0, kinds.length))];
+      const len = kind === 'truck' ? 2 : 1;
+      const hue = [0, 45, 200, 280, 150][Math.floor(rand(0,5))];
+      items.push({ x, len, kind, hue });
+      x += len + Math.max(1.8, gap + rand(0, 1.5));
+    }
+    lanes[row] = { row, type: 'car', dir, spd, items };
+  });
+
+  pads = [1, 3, 5, 7, 9].map(c => ({ col: c, filled: false }));
+  // Fresh extra-life chance each level (max 1 collected per level).
+  pickup = null;
+  pickupUsed = false;
+  pickupTimer = rand(20, 200);
+  resetFrog();
+}
+
+function resetFrog() {
+  frog = { col: 5, row: R_START, px: 5, py: R_START, onLog: null, logOffset: 0, hopT: 0, dir: 'up' };
+}
+
+function startGame() {
+  level = 1; score = 0; lives = 3;
+  pickup = null;
+  pickupTimer = rand(30, 230); // first extra life appears within 30-230s
+  pickupGlow = 0;
+  pickupUsed = false;
+  updateHUD();
+  buildLevel();
+  state = 'play';
+  overlay.classList.add('hidden');
+  lastT = performance.now();
+}
+
+function updateHUD() {
+  lvlEl.textContent = level;
+  scoreEl.textContent = score;
+  livesEl.textContent = '🐸'.repeat(Math.max(0, lives)) || '💀';
+}
+
+// ---- Movement ----
+function move(dx, dy) {
+  if (state !== 'play' || frog.hopT > 0) return;
+  // When riding a log, our logical column is the rounded float position
+  const curCol = frog.onLog ? Math.round(frog.px) : frog.col;
+  let nc = curCol + dx;
+  let nr = frog.row + dy;
+  if (nc < 0 || nc >= COLS || nr < 0 || nr >= TOTAL_ROWS) return;
+  if (dy === -1) frog.dir = 'up';
+  else if (dy === 1) frog.dir = 'down';
+  else if (dx === -1) frog.dir = 'left';
+  else frog.dir = 'right';
+  frog.onLog = null; // leaving current tile — re-evaluate footing on landing
+  frog.startCol = frog.px; frog.startRow = frog.py;
+  frog.col = nc; frog.row = nr;
+  frog.hopT = 1;
+  SFX.hop();
+  if (dy === -1) { score += 10; updateHUD(); }
+}
+
+// ---- Input ----
+document.addEventListener('keydown', e => {
+  initAudio();
+  const k = e.key;
+  if (k === 'ArrowUp' || k === 'w') { move(0, -1); e.preventDefault(); }
+  else if (k === 'ArrowDown' || k === 's') { move(0, 1); e.preventDefault(); }
+  else if (k === 'ArrowLeft' || k === 'a') { move(-1, 0); e.preventDefault(); }
+  else if (k === 'ArrowRight' || k === 'd') { move(1, 0); e.preventDefault(); }
+});
+
+let touchStart = null;
+canvas.addEventListener('touchstart', e => {
+  initAudio();
+  touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() };
+}, { passive: true });
+canvas.addEventListener('touchend', e => {
+  if (!touchStart) return;
+  const t = e.changedTouches[0];
+  const dx = t.clientX - touchStart.x;
+  const dy = t.clientY - touchStart.y;
+  const adx = Math.abs(dx), ady = Math.abs(dy);
+  if (adx < 24 && ady < 24) {
+    // tap: move toward tap location relative to frog
+    const rect = canvas.getBoundingClientRect();
+    const fx = offX + (frog.col + 0.5) * TILE;
+    const fy = offY + (frog.row + 0.5) * TILE;
+    const tx = t.clientX - rect.left, ty = t.clientY - rect.top;
+    if (Math.abs(tx - fx) > Math.abs(ty - fy)) move(tx > fx ? 1 : -1, 0);
+    else move(0, ty > fy ? 1 : -1);
+  } else {
+    if (adx > ady) move(dx > 0 ? 1 : -1, 0);
+    else move(0, dy > 0 ? 1 : -1);
+  }
+  touchStart = null;
+}, { passive: true });
+
+startBtn.addEventListener('click', () => { initAudio(); document.getElementById('bgm').play(); startGame(); });
+
+document.getElementById('muteBtn').addEventListener('click', (e) => {
+  muted = !muted;
+  e.target.textContent = muted ? '🔇' : '🔊';
+});
+
+function spawnPickup() {
+  // Choose a river or road row (the interesting lanes).
+  const candidateRows = [...RIVER, ...ROAD];
+  const row = candidateRows[Math.floor(rand(0, candidateRows.length))];
+  const lane = lanes[row];
+
+  if (lane.type === 'log' || lane.type === 'turtle') {
+    // Latch to an on-screen carrier so it floats along and expires with it.
+    const onScreen = lane.items.filter(it => it.x > 0 && it.x + it.len < COLS);
+    if (!onScreen.length) { pickupTimer = rand(2, 6); return; } // try again shortly
+    const carrier = onScreen[Math.floor(rand(0, onScreen.length))];
+    const offset = rand(0.2, Math.max(0.2, carrier.len - 0.8)); // sit somewhere along it
+    pickup = { row, carrier, offset, x: carrier.x + offset };
+  } else {
+    // Road: static spot the frog must reach; cars just drive over it.
+    pickup = { row, carrier: null, offset: 0, x: Math.floor(rand(1, COLS - 1)) };
+  }
+}
+
+
+// ---- Update ----
+let lastT = 0;
+function update(dt) {
+  if (state !== 'play') return;
+
+  // move lane items
+  for (const row in lanes) {
+    const lane = lanes[row];
+    const laneGap = lane.type === 'car' ? 2.2 : 1.6; // min clear space between items
+    for (const it of lane.items) {
+      it.x += lane.spd * dt;
+      if (lane.spd > 0 && it.x > COLS + 2) {
+        // recycle to the left, behind the current leftmost item
+        let minX = Infinity;
+        for (const o of lane.items) if (o !== it) minX = Math.min(minX, o.x);
+        it.x = Math.min(-it.len - rand(0.5, 2), minX - it.len - laneGap - rand(0, 1));
+      }
+      if (lane.spd < 0 && it.x < -it.len - 2) {
+        // recycle to the right, behind the current rightmost item
+        let maxX = -Infinity;
+        for (const o of lane.items) if (o !== it) maxX = Math.max(maxX, o.x + o.len);
+        it.x = Math.max(COLS + rand(0.5, 2), maxX + laneGap + rand(0, 1));
+      }
+      if (it.diving) it.phase += dt * 0.9;
+    }
+  }
+
+  // ---- Extra-life pickup (golden frog) ----
+  if (pickupGlow > 0) pickupGlow = Math.max(0, pickupGlow - dt);
+  if (!pickup) {
+    if (!pickupUsed) {
+      pickupTimer -= dt;
+      if (pickupTimer <= 0) spawnPickup();
+    }
+  } else {
+    // Move with its carrier (log/turtle). Road pickups stay put.
+    if (pickup.carrier) {
+      pickup.x = pickup.carrier.x + pickup.offset;
+      // Gone forever once the carrying log/turtle drifts off screen.
+      if (pickup.x < -1.5 || pickup.x > COLS + 1.5) pickup = null;
+    }
+    if (pickup) {
+      // Collect when the frog shares the pickup's tile.
+      const onSameRow = frog.row === pickup.row && frog.hopT === 0;
+      const dx = Math.abs((frog.px + 0.5) - (pickup.x + 0.5));
+      // A pickup on a sinking turtle can't be grabbed while it's under water.
+      const submerged = pickup.carrier && pickup.carrier.diving && Math.sin(pickup.carrier.phase) < -0.5;
+      if (onSameRow && dx < 0.7 && !submerged) {
+        lives++;
+        updateHUD();
+        SFX.charm();
+        pickupGlow = 0.6;
+        pickup = null;
+        pickupUsed = true; // no more extra lives this level
+      }
+    }
+  }
+
+  // frog hop interpolation
+  if (frog.hopT > 0) {
+    frog.hopT = Math.max(0, frog.hopT - dt * 8);
+    const t = 1 - frog.hopT;
+    frog.px = frog.startCol + (frog.col - frog.startCol) * t;
+    frog.py = frog.startRow + (frog.row - frog.startRow) * t;
+    if (frog.hopT === 0) { frog.px = frog.col; frog.py = frog.row; }
+  } else {
+    // On the river: must be riding a log/turtle
+    if (RIVER.includes(frog.row)) {
+      const lane = lanes[frog.row];
+
+      // If already latched, we only fall off if the turtle sinks FULLY under.
+      // A partial dip is a visible warning, not instant death.
+      let carrier = frog.onLog;
+      if (carrier) {
+        const stillThere = lane.items.includes(carrier);
+        const fullyUnder = carrier.diving && Math.sin(carrier.phase) < -0.85;
+        if (!stillThere || fullyUnder) carrier = null;
+      }
+
+      // Not latched? Grab a log/turtle our center is over (skip fully-sunk turtles).
+      if (!carrier) {
+        for (const it of lane.items) {
+          if (it.diving && Math.sin(it.phase) < -0.5) continue; // don't land on a sinking turtle
+          const center = frog.px + 0.5;
+          if (center > it.x - 0.15 && center < it.x + it.len + 0.15) {
+            carrier = it;
+            frog.logOffset = center - it.x; // remember where on the log we stand
+            break;
+          }
+        }
+      }
+
+      if (carrier) {
+        frog.onLog = carrier;
+        // Move exactly with the log: position is derived from the log, not integrated separately
+        frog.px = carrier.x + frog.logOffset - 0.5;
+        frog.col = Math.round(frog.px);
+        // Only die if the log carries us off the screen
+        if (frog.px < -0.5 || frog.px > COLS - 0.5) return die();
+      } else {
+        return die(); // genuinely in the water
+      }
+    } else {
+      frog.onLog = null; // left the river
+    }
+  }
+
+  // collisions on road
+  if (ROAD.includes(frog.row) && frog.hopT < 0.5) {
+    const lane = lanes[frog.row];
+    for (const it of lane.items) {
+      if (frog.px + 0.5 > it.x && frog.px + 0.5 < it.x + it.len) return die();
+    }
+  }
+
+  // reaching home row
+  if (frog.row === R_HOME && frog.hopT === 0) {
+    const pad = pads.find(p => Math.abs(p.col - frog.px) < 0.6 && !p.filled);
+    if (pad) {
+      pad.filled = true;
+      score += 100;
+      updateHUD();
+      winFlash = 0.5;
+      if (pads.every(p => p.filled)) {
+        level++; score += 100; updateHUD();
+        SFX.level();
+        state = 'levelup'; // freeze update so the frog can't re-hit the home row
+        setTimeout(() => { buildLevel(); state = 'play'; }, 400);
+      } else {
+        SFX.pad();
+        resetFrog();
+      }
+    } else {
+      return die(); // hit non-pad top
+    }
+  }
+
+  // timer removed — no time pressure
+}
+
+function die() {
+  lives--;
+  updateHUD();
+  SFX.splat();
+  deathAnim = 0.6;
+  if (lives <= 0) {
+    setTimeout(() => gameOver(), 400);
+    state = 'dead';
+  } else {
+    state = 'dead';
+    setTimeout(() => { resetFrog(); state = 'play'; }, 500);
+  }
+}
+
+function gameOver() {
+  state = 'menu';
+  overlay.classList.remove('hidden');
+  overlay.innerHTML = `
+    <h2>Game Over</h2>
+    <p>You reached <b style="color:#7ee0a0">Level ${level}</b> with <b style="color:#ffe08a">${score}</b> points.</p>
+    <button class="btn" id="startBtn2">Play Again</button>`;
+  document.getElementById('startBtn2').addEventListener('click', startGame);
+}
+
+// ---- Draw ----
+function draw() {
+  if (!boardW || !cssW) return;
+  const w = cssW, h = cssH;
+  ctx.clearRect(0, 0, w, h);
+
+  // backdrop outside board
+  ctx.fillStyle = '#0a1522';
+  ctx.fillRect(0, 0, w, h);
+
+  drawRow(R_HOME, '#1a4a30');       // home bank
+  RIVER.forEach(r => drawRow(r, '#2b6ea8')); // water
+  drawRow(R_MED, '#3a8c56');        // median grass
+  ROAD.forEach(r => drawRow(r, '#2a2d33'));  // road
+  drawRow(R_START, '#3a8c56');      // start grass
+
+  // road lane dashes
+  ROAD.forEach(r => {
+    ctx.strokeStyle = 'rgba(255,220,120,0.35)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([TILE*0.35, TILE*0.35]);
+    const y = offY + (r + 1) * TILE;
+    ctx.beginPath(); ctx.moveTo(offX, y); ctx.lineTo(offX + boardW, y); ctx.stroke();
+    ctx.setLineDash([]);
+  });
+
+  // water shimmer
+  RIVER.forEach(r => {
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    const y = offY + (r + 0.5) * TILE;
+    ctx.beginPath();
+    for (let x = 0; x < boardW; x += 6) {
+      ctx.lineTo(offX + x, y + Math.sin(x*0.1 + performance.now()*0.002)*2);
+    }
+    ctx.stroke();
+  });
+
+  if (state === 'menu' || !pads) return;
+
+  // home pads
+  pads.forEach(p => {
+    const cx = offX + (p.col + 0.5) * TILE;
+    const cy = offY + (R_HOME + 0.5) * TILE;
+    drawLilyPad(cx, cy, TILE*0.42);
+    if (p.filled) drawFrogSprite(cx, cy, TILE*0.34, 'up', '#5bbf3a');
+  });
+
+  // lane items
+  for (const row in lanes) {
+    const lane = lanes[row];
+    for (const it of lane.items) {
+      const x = offX + it.x * TILE;
+      const y = offY + row * TILE;
+      if (lane.type === 'log') drawLog(x, y, it.len);
+      else if (lane.type === 'turtle') drawTurtles(x, y, it.len, it.diving, it.phase);
+      else drawCar(x, y, it.len, it.kind, it.hue, lane.dir);
+    }
+  }
+
+  // extra-life pickup (golden frog)
+  if (pickup) {
+    const submerged = pickup.carrier && pickup.carrier.diving && Math.sin(pickup.carrier.phase) < -0.5;
+    if (!submerged) {
+      const gx = offX + (pickup.x + 0.5) * TILE;
+      const gy = offY + (pickup.row + 0.5) * TILE;
+      const bob = Math.sin(performance.now() * 0.005) * TILE * 0.06;
+      drawGoldenFrog(gx, gy + bob, TILE * 0.34);
+    }
+  }
+
+  // frog
+  const fx = offX + (frog.px + 0.5) * TILE;
+  const fy = offY + (frog.py + 0.5) * TILE;
+  const hop = frog.hopT > 0 ? Math.sin((1-frog.hopT)*Math.PI) * TILE * 0.25 : 0;
+  if (deathAnim > 0) {
+    ctx.globalAlpha = deathAnim / 0.6;
+    drawSplat(fx, fy, TILE*0.4);
+    ctx.globalAlpha = 1;
+  } else {
+    drawFrogSprite(fx, fy - hop, TILE*0.38, frog.dir, '#5bbf3a');
+  }
+
+}
+
+function drawRow(r, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(offX, offY + r * TILE, boardW, TILE);
+}
+
+function drawLilyPad(cx, cy, rad) {
+  ctx.fillStyle = '#2f7a3f';
+  ctx.beginPath();
+  ctx.arc(cx, cy, rad, 0.4, Math.PI*2 + 0.1);
+  ctx.lineTo(cx, cy);
+  ctx.fill();
+  ctx.fillStyle = '#3d9450';
+  ctx.beginPath(); ctx.arc(cx, cy, rad*0.7, 0, Math.PI*2); ctx.fill();
+}
+
+function drawLog(x, y, len) {
+  const w = len * TILE, h = TILE * 0.7;
+  const yy = y + (TILE - h)/2;
+  ctx.fillStyle = '#8a5a2b';
+  roundRect(x + 2, yy, w - 4, h, h*0.4); ctx.fill();
+  ctx.fillStyle = '#6e461f';
+  ctx.beginPath(); ctx.ellipse(x + 6, yy + h/2, h*0.28, h*0.32, 0, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.15)'; ctx.lineWidth = 2;
+  for (let i=1;i<len;i++){ ctx.beginPath(); ctx.moveTo(x+i*TILE, yy+4); ctx.lineTo(x+i*TILE, yy+h-4); ctx.stroke(); }
+}
+
+function drawTurtles(x, y, len, diving, phase) {
+  // sink runs 0 (fully up, safe) -> 1 (fully under, deadly), tracking the SAME
+  // sin(phase) the collision uses, so what you see matches what kills you.
+  const s = Math.sin(phase);
+  const sink = diving ? Math.max(0, -s) : 0; // only negative half submerges
+  for (let i=0;i<len;i++){
+    const cx = x + (i+0.5)*TILE, cy = y + TILE*0.5 + sink*TILE*0.15;
+    ctx.globalAlpha = 1 - sink*0.85;
+    ctx.fillStyle = '#2e8b57';
+    ctx.beginPath(); ctx.ellipse(cx, cy, TILE*0.34*(1-sink*0.3), TILE*0.28*(1-sink*0.3), 0, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#256e46';
+    ctx.beginPath(); ctx.arc(cx, cy, TILE*0.16*(1-sink*0.3), 0, Math.PI*2); ctx.fill();
+    if (sink < 0.3) { ctx.fillStyle='#1f5c3a'; ctx.beginPath(); ctx.arc(cx+TILE*0.28*(i%2?1:-1), cy, TILE*0.08,0,Math.PI*2); ctx.fill(); }
+    // little bubbles as it goes under — the warning cue
+    if (sink > 0.4) {
+      ctx.globalAlpha = (sink - 0.4) * 0.9;
+      ctx.fillStyle = 'rgba(220,240,255,0.8)';
+      ctx.beginPath(); ctx.arc(cx - TILE*0.1, cy - TILE*0.2, TILE*0.05, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx + TILE*0.12, cy - TILE*0.28, TILE*0.035, 0, Math.PI*2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawCar(x, y, len, kind, hue, dir) {
+  const w = len * TILE - 8, h = TILE * 0.68;
+  const yy = y + (TILE - h)/2;
+  ctx.fillStyle = `hsl(${hue}, 65%, 52%)`;
+  roundRect(x + 4, yy, w, h, 8); ctx.fill();
+  // cabin
+  ctx.fillStyle = 'rgba(180,230,255,0.85)';
+  const cabW = kind === 'truck' ? w*0.35 : w*0.5;
+  const cabX = dir > 0 ? x + 4 + w - cabW - 4 : x + 8;
+  roundRect(cabX, yy + 4, cabW, h*0.5, 4); ctx.fill();
+  // wheels
+  ctx.fillStyle = '#111';
+  ctx.beginPath(); ctx.arc(x+12, yy+h, 5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x+w-4, yy+h, 5, 0, Math.PI*2); ctx.fill();
+  // headlight
+  ctx.fillStyle = '#fff59a';
+  const hlx = dir > 0 ? x + w : x + 6;
+  ctx.beginPath(); ctx.arc(hlx, yy + h*0.5, 3, 0, Math.PI*2); ctx.fill();
+}
+
+function drawFrogSprite(cx, cy, r, dir, color) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  const rot = { up:0, right:Math.PI/2, down:Math.PI, left:-Math.PI/2 }[dir] || 0;
+  ctx.rotate(rot);
+  // legs
+  ctx.fillStyle = '#4aa02f';
+  ctx.beginPath(); ctx.ellipse(-r*0.7, r*0.5, r*0.35, r*0.6, 0.5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(r*0.7, r*0.5, r*0.35, r*0.6, -0.5, 0, Math.PI*2); ctx.fill();
+  // body
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.ellipse(0, 0, r*0.8, r, 0, 0, Math.PI*2); ctx.fill();
+  // back stripe
+  ctx.fillStyle = '#4aa02f';
+  ctx.beginPath(); ctx.ellipse(0, r*0.2, r*0.4, r*0.5, 0, 0, Math.PI*2); ctx.fill();
+  // eyes
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(-r*0.35, -r*0.7, r*0.28, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(r*0.35, -r*0.7, r*0.28, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(-r*0.35, -r*0.72, r*0.16, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(r*0.35, -r*0.72, r*0.16, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#111';
+  ctx.beginPath(); ctx.arc(-r*0.35, -r*0.72, r*0.08, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(r*0.35, -r*0.72, r*0.08, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawGoldenFrog(cx, cy, r) {
+  // soft glowing halo
+  const t = performance.now() * 0.004;
+  const glowR = r * (2.0 + Math.sin(t) * 0.25);
+  const grad = ctx.createRadialGradient(cx, cy, r*0.3, cx, cy, glowR);
+  grad.addColorStop(0, 'rgba(255,230,120,0.55)');
+  grad.addColorStop(0.5, 'rgba(255,210,80,0.22)');
+  grad.addColorStop(1, 'rgba(255,210,80,0)');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(cx, cy, glowR, 0, Math.PI*2); ctx.fill();
+
+  // little sparkles
+  for (let i=0;i<3;i++){
+    const a = t*1.5 + i*(Math.PI*2/3);
+    const sx = cx + Math.cos(a)*r*1.3, sy = cy + Math.sin(a)*r*1.3;
+    ctx.fillStyle = 'rgba(255,255,220,0.9)';
+    ctx.beginPath(); ctx.arc(sx, sy, r*0.08, 0, Math.PI*2); ctx.fill();
+  }
+
+  // gold frog body (facing up)
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.fillStyle = '#d99a1a';
+  ctx.beginPath(); ctx.ellipse(-r*0.7, r*0.5, r*0.35, r*0.6, 0.5, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(r*0.7, r*0.5, r*0.35, r*0.6, -0.5, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#ffcf3f';
+  ctx.beginPath(); ctx.ellipse(0, 0, r*0.8, r, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#e6a91e';
+  ctx.beginPath(); ctx.ellipse(0, r*0.2, r*0.4, r*0.5, 0, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#ffcf3f';
+  ctx.beginPath(); ctx.arc(-r*0.35, -r*0.7, r*0.28, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(r*0.35, -r*0.7, r*0.28, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(-r*0.35, -r*0.72, r*0.15, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(r*0.35, -r*0.72, r*0.15, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#111';
+  ctx.beginPath(); ctx.arc(-r*0.35, -r*0.72, r*0.07, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(r*0.35, -r*0.72, r*0.07, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+function drawSplat(cx, cy, r) {
+  ctx.fillStyle = '#c23b5a';
+  for (let i=0;i<7;i++){
+    const a = i/7*Math.PI*2;
+    ctx.beginPath();
+    ctx.arc(cx+Math.cos(a)*r*0.6, cy+Math.sin(a)*r*0.6, r*0.3, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.beginPath(); ctx.arc(cx, cy, r*0.5, 0, Math.PI*2); ctx.fill();
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r);
+  ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r);
+  ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+
+// ---- Loop ----
+function loop(t) {
+  try {
+    const dt = Math.min(0.05, (t - lastT) / 1000);
+    lastT = t;
+    if (deathAnim > 0) deathAnim = Math.max(0, deathAnim - dt);
+    if (winFlash > 0) winFlash = Math.max(0, winFlash - dt);
+    update(dt);
+    draw();
+  } catch (e) {
+    showError(e);
+  }
+  requestAnimationFrame(loop);
+}
+
+function showError(e) {
+  const msg = (e && e.stack) ? e.stack : String(e);
+  console.error(msg);
+  if (!window._errShown) {
+    window._errShown = true;
+    overlay.classList.remove('hidden');
+    overlay.innerHTML = '<h2 style="color:#ff8a8a">Oops</h2>' +
+      '<p style="font-size:12px;white-space:pre-wrap;text-align:left;opacity:0.85;max-width:340px">' +
+      msg.replace(/</g,'&lt;') + '</p>';
+  }
+}
+
+window.addEventListener('error', ev => {
+  showError(ev.error || (ev.message + ' @ ' + ev.filename + ':' + ev.lineno));
+});
+
+window.addEventListener('resize', resize);
+resize();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
